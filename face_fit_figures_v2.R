@@ -16,7 +16,7 @@ library(egg)
 library(cowplot)
 library(ggpattern)
 
-setwd("L:/PRIV/EPHD_CRB/FACEFIT/DATA")
+setwd("")
 
 demographics<-fread("R_scripts_input/demographics.csv")
 names(demographics)
