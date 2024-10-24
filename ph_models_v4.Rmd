@@ -1,0 +1,458 @@
+---
+title: "PH Paper Models"
+author: "Melissa McInroe"
+date: "2023-09-19"
+output: 
+  html_document:
+    fig_height: 14
+    fig_width: 20
+    fig_align: "center"
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+## Load Packages and Data  
+In this script we explore several models for Face Fit data. 
+
+```{r load data}
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(nlme)                     # for mixed effects models
+library(tidyr)
+library(corrplot)               # correlation visualization
+library(rstatix)                # correlation analysis
+library(lsmeans)                # post-hoc tests
+library(multcomp)
+library(emmeans)
+
+setwd("O:/PRIV/CPHEA/PHITD/EPHD_CRB/FACEFIT/DATA")
+
+demographics<-fread("R_scripts_input/demographics.csv")
+#measurements<-fread("PythonOutput/total_table_scaled_8-14-2023.csv")
+FFE<-fread("R_scripts_input/FFE.csv")
+
+FFE$KN95_diff<-FFE$KN95_clip-FFE$KN95
+FFE$Surgical_diff<-FFE$Surgical_clip-FFE$Surgical
+FFE$KF94_diff<-FFE$KF94_clip-FFE$KF94
+FFE$MKF94_diff<-FFE$MKF94_clip-FFE$MKF94
+
+# demographics$subject<-str_sub(demographics$`Study #`, -3,-1)
+# 
+# measurements$subject<-str_pad(measurements$subject,3,pad="0")
+# 
+# full_stats<-left_join(measurements,demographics, by="subject")
+# colnames(full_stats)[11]<-"overall_mean"
+
+# full_stat_wide <- pivot_wider(full_stats[,c(1,2,11,46)], names_from="Condition", values_from = overall_mean)
+
+FFE_diff<-FFE[,c(1,3,15:18)]
+FFE_diff<-pivot_longer(FFE_diff,cols=3:6, names_to="Condition", values_to="Difference")
+FFE_diff$Condition<-gsub("_diff","",FFE_diff$Condition)
+FFE_diff<-as.data.frame(FFE_diff)
+
+FFE_long<-pivot_longer(FFE,cols=c(7:14), names_to="Condition", values_to="Overall_FFE")
+FFE_long<-FFE_long[,c(1,3:5,11,12)]
+
+
+```
+
+
+## Summary Statistics  
+
+```{r summary stats}
+## Demographics
+## remove subjects that did not complete the experiments
+demographics<-demographics[-c(4,16,23,43,52,54,66,73,100,103,107,111)]
+## correct error that was recorded (female had BMI of 31.00, not 39.15)
+demographics[24,8]<-31.00
+summary(demographics)
+colnames(demographics)[c(6,7)]<-c("Height","Weight")
+demo_sum<-demographics %>% group_by(Sex) %>%
+  summarize(Age_mean=mean(Age,na.rm=TRUE), Age_median = median(Age,na.rm=TRUE), Age_sd=sd(Age, na.rm=TRUE),
+            Height_mean=mean(Height,na.rm=TRUE), Height_median=median(Height, na.rm=TRUE), Height_sd=sd(Height,na.rm=TRUE),
+            Weight_mean=mean(Weight, na.rm=TRUE), Weight_median=median(Weight, na.rm=TRUE), Weight_sd=sd(Weight, na.rm=TRUE),
+            BMI_mean=mean(BMI, na.rm=TRUE), BMI_median=median(BMI, na.rm=TRUE), BMI_sd=sd(BMI, na.rm=TRUE))
+
+demo_sum
+demo_sum<-pivot_longer(demo_sum,cols = !Sex, names_to=c("variable", "sum_stat"), names_sep = "_", values_to="value")
+demo_sum<-pivot_wider(demo_sum, names_from=c(Sex, sum_stat), names_sep = "_", values_from=value)
+
+t.test(demographics$Age[which(demographics$Sex=="F")], demographics$Age[which(demographics$Sex=="M")], var.equal = T)
+t.test(demographics$Height[which(demographics$Sex=="F")], demographics$Height[which(demographics$Sex=="M")], var.equal = T)
+t.test(demographics$Weight[which(demographics$Sex=="F")], demographics$Weight[which(demographics$Sex=="M")], var.equal = T)
+t.test(demographics$BMI[which(demographics$Sex=="F")], demographics$BMI[which(demographics$Sex=="M")], var.equal = T)
+
+summary(as.factor(demographics$`Race/Ethnicity`))
+colnames(demographics)[5]<-"Race_Ethnicity"
+## consolidate Race/ethnicity groupings
+demographics$Race_Ethnicity<-ifelse(demographics$Race_Ethnicity=="Asain" | demographics$Race_Ethnicity=="Asian" | demographics$Race_Ethnicity=="Asian Indian" |demographics$Race_Ethnicity=="Asian/Chinese" | demographics$Race_Ethnicity=="Asian/Indian" | demographics$Race_Ethnicity=="Indian", "Asian", ifelse(demographics$Race_Ethnicity=="Caucasion/Hispanic" | demographics$Race_Ethnicity=="Hispanic" | demographics$Race_Ethnicity=="White/Caucasian/Hispanic" | demographics$Race_Ethnicity=="Latino", "Hispanic/Latino", ifelse(demographics$Race_Ethnicity=="White/Caucasian" |  demographics$Race_Ethnicity=="White/Caucasion", "Non-Hispanic White", ifelse(demographics$Race_Ethnicity=="Black/African American", "Non-Hispanic Black", "Other including Multi-Race"))))
+
+summary(as.factor(demographics$Race_Ethnicity))
+
+
+## Masks
+summary(FFE[,c(6,7,9,11,13)])
+FFE_sum<-FFE %>% group_by(Sex) %>%
+  summarize(N95_mean=mean(N95,na.rm=TRUE), N95_median = median(N95,na.rm=TRUE), N95_sd=sd(N95, na.rm=TRUE),
+            KN95_mean=mean(KN95,na.rm=TRUE), KN95_median=median(KN95, na.rm=TRUE), KN95_sd=sd(KN95,na.rm=TRUE),
+            Surgical_mean=mean(Surgical, na.rm=TRUE), Surgical_median=median(Surgical, na.rm=TRUE), Surgical_sd=sd(Surgical, na.rm=TRUE),
+            KF94_mean=mean(KF94, na.rm=TRUE), KF94_median=median(KF94, na.rm=TRUE), KF94_sd=sd(KF94, na.rm=TRUE),
+            MKF94_mean=mean(MKF94, na.rm=TRUE), MKF94_median=median(MKF94, na.rm=TRUE), MKF94_sd=sd(MKF94, na.rm=TRUE))
+FFE_sum
+
+## Sex_difference_clip
+FFE_clip_sum<-FFE %>% group_by(Sex) %>%
+  summarize(KN95_mean=mean(KN95_clip,na.rm=TRUE), 
+            KN95_median=median(KN95_clip, na.rm=TRUE), 
+            KN95_sd=sd(KN95_clip,na.rm=TRUE),
+            KN95_diff_mean=mean(KN95_diff, na.rm=TRUE),
+            KN95_diff_median=median(KN95_diff, na.rm=TRUE),
+            Surgical_mean=mean(Surgical_clip, na.rm=TRUE),
+            Surgical_median=median(Surgical_clip, na.rm=TRUE),
+            Surgical_sd=sd(Surgical_clip, na.rm=TRUE),
+            Surgical_diff_mean=mean(Surgical_diff, na.rm=TRUE),
+            Surgical_diff_median=median(Surgical_diff, na.rm=TRUE),
+            KF94_mean=mean(KF94_clip, na.rm=TRUE), 
+            KF94_median=median(KF94_clip, na.rm=TRUE), 
+            KF94_sd=sd(KF94_clip, na.rm=TRUE),
+            KF94_diff_mean=mean(KF94_diff, na.rm=TRUE),
+            KF94_diff_median=median(KF94_diff, na.rm=TRUE),
+            MKF94_mean=mean(MKF94_clip, na.rm=TRUE), 
+            MKF94_median=median(MKF94_clip, na.rm=TRUE), 
+            MKF94_sd=sd(MKF94_clip, na.rm=TRUE),
+            MKF94_diff_mean=mean(MKF94_diff, na.rm=TRUE),
+            MKF94_diff_median=median(MKF94_diff, na.rm=TRUE))
+
+FFE_clip_sum
+
+summary(FFE)
+summary(FFE[which(FFE$Sex=="M"),])
+summary(FFE[which(FFE$Sex=="F"),])
+
+length(which(FFE$N95>=95))       #87
+length(which(FFE$N95>=95 & FFE$Sex=="M"))
+length(which(FFE$N95>=95 & FFE$Sex=="F"))
+
+```
+
+## Correlation of Demographic Information 
+
+```{r correlation}
+demographics$Age<-as.numeric(demographics$Age)
+demographics$sex_dum<-ifelse(demographics$Sex =="F", 1,0)
+cormatrix<-cor_mat(demographics[,-c(1,2,4,5)], method = "pearson")
+cor_pvals<-cor_gather(cormatrix)
+cor_pvals<-as.data.frame(cor_pvals)
+corrplot(cor(demographics[,-c(1,2,4,5)], method = "pearson"),method = "color", type = "upper", diag = FALSE, addCoef.col = "black")
+```
+
+
+
+
+# Experiment 1: Explore the variance in FFE of commonly worn masks
+## Linear Regression Models
+In this section we look at different models to explain the variation for the baseline (overall) FFE for each mask. We chose Condition (mask) and sex as the predictor variables. The referent is N95. We also look at Age and BMI as covariates or confounders. Linear regression is the method used in all the models in this section. The models are also subset to exclude MKF94 that will not be included in the analysis. 
+```{r interaction}
+colnames(demographics)[1]<-"Subject"
+demographics<-demographics[,-c(2:4,8,9)]
+FFE<-left_join(FFE, demographics, by="Subject")
+## remove MKF94 
+FFE_base<-pivot_longer(FFE, cols = c(6,7,9,11), names_to="Condition", values_to="Overall_FFE")
+FFE_base<-FFE_base[,-c(2,6:14)]
+
+#FFE_base$Condition<-relevel(as.factor(FFE_base$Condition), ref="N95")
+FFE_base$Condition<-factor(FFE_base$Condition, levels = c("N95", "KN95", "Surgical", "KF94"))
+FFE_base$Sex<-relevel(as.factor(FFE_base$Sex), ref="F")
+FFE_base<-as.data.frame(FFE_base)
+
+
+## Mixed Effects model with Subject as the random effect
+model3<-lme(Overall_FFE~Condition*Sex, random = ~1|Subject, data = FFE_base)
+summary(model3)
+ranef(model3)
+intervals(model3)
+
+
+model3<-lme(Overall_FFE~Condition*Sex-1, random = ~1|Subject, data = FFE_base)
+summary(model3)
+anova(model3)
+```
+
+The above models only include the overall FFE for masks without the clip. This models shows that there is a statistically significant difference between male and females for the masks. When we change the referent mask to N95 because it is considered the most effective mask sex is not significant in the regression model because males and females are not different for that mask. The interaction between mask and sex does show a significance, with the exception of the KF94(M). This makes sense when you look at the box plots of the raw data without a clip. When you look at the ANOVA, you can see that sex is a significant variable. 
+
+## Contrasts  
+
+In this section the same models are performed as above, but the contrasts are changed to compare the means to the overall group mean.   
+
+```{r contrasts}
+contrasts(FFE_base$Condition)<-contr.sum(4)
+contrasts(FFE_base$Sex)<-contr.sum(2)
+
+model5<-lme(Overall_FFE~ Condition, ~1|Subject, data = FFE_base, contrasts = list(Condition = contr.sum(4)))
+lsmeans(model5, pairwise~Condition)
+
+dummy.coef(lm(Overall_FFE~Condition*Sex, data = FFE_base, contrasts = list(Condition = contr.sum(4), Sex = contr.sum(2))))
+
+model4<-lme(Overall_FFE~Condition*Sex, random = ~1|Subject, data = FFE_base, 
+            contrasts = list(Condition = contr.sum(4), Sex = contr.sum(2)))
+summary(model4)
+anova(model4)
+intervals(model4)
+
+# model4<-lme(Overall_FFE-mean(Overall_FFE)~Condition*Sex-1, random = ~1|Subject, data = FFE_base, 
+#             contrasts = list(Condition = contr.sum(4), Sex = contr.sum(2)))
+# summary(model4)
+
+mask<-emmeans(model4,~Condition)
+pairs(mask)
+
+mask_sex<-emmeans(model4,~Sex | Condition)
+pairs(mask_sex)
+confint(pairs(mask_sex))
+
+sex<-emmeans(model4, ~Sex + Condition)
+pairs(sex)
+confint(pairs(sex))
+
+cld(sex, Letters = letters)
+# 
+# ls.means<-lsmeans(model4, pairwise~Condition*Sex, adjust="tukey")
+# ls.means
+# 
+# ls.means<-lsmeans(model4, pairwise~Condition, adjust="tukey")
+# ls.means
+# 
+# ls.means<-lsmeans(model4, pairwise~Sex, adjust="tukey")
+# ls.means
+
+```
+
+
+## Sensitivity Analysis
+In this section we look at whether demographic variables change the interpretation or conclusions of the final model from the section above.
+
+```{r sensitivity}
+
+model_race<-lme(Overall_FFE~Condition*Sex+Race_Ethnicity + Age + BMI, random = ~1|Subject, data = FFE_base,
+                contrasts = list(Condition = contr.sum(4), Sex = contr.sum(2)))
+summary(model_race)
+
+
+```
+
+
+# Experiment 2
+## Clip Modification
+In experiment 2, the ear loop mask are modified with a clip to evaluate performance. Expected to improve performance. N95 is removed from the analysis because it is not an ear loop mask and it is not modifiable. 
+
+```{r clip_trt_models}
+FFE_clip<-pivot_longer(FFE, cols = c(6:14), names_to="Condition", values_to="Overall_FFE")
+
+#Add clip as a modification
+FFE_clip$Clip<-as.factor(ifelse(str_sub(FFE_clip$Condition,-4,-1)=="clip", 1,0))
+FFE_clip$Condition<-as.factor(ifelse(str_sub(FFE_clip$Condition,-4,-1)=="clip", gsub("_clip","", FFE_clip$Condition), FFE_clip$Condition))
+#FFE_clip$Clip<-as.factor(ifelse(FFE_clip$Condition == "N95", "base", FFE_clip$Clip))
+
+#3-way interaction with N95 as the base for comparison
+#FFE_clip$Condition<-relevel(as.factor(FFE_clip$Condition), ref="N95")
+
+#Subset to remove MKF94 and N95
+FFE_clip_subset<-subset(FFE_clip, Condition %in% c("KN95", "Surgical", "KF94"))
+FFE_clip_subset$Condition<-relevel(as.factor(FFE_clip_subset$Condition), ref="Surgical")
+#FFE_clip_subset$Condition<-factor(FFE_clip_subset$Condition, levels = c( "KN95","Surgical", "KF94"))
+
+
+
+# interaction between clip and sex
+model5<-lme(Overall_FFE~Condition+Clip*Sex, random = ~1|Subject, data = FFE_clip_subset)
+summary(model5)
+
+#confidence intervals for the fixed effects of model 5
+intervals(model5)
+
+#Sensitivity Analysis
+model5c<-lme(Overall_FFE~Condition + Clip*Sex+BMI+Age+Race_Ethnicity, random = ~1|Subject, data = FFE_clip_subset)
+summary(model5c)
+
+
+model5<-lme(Overall_FFE~Condition+Clip*Sex-1, random = ~1|Subject, data = FFE_clip_subset)
+summary(model5)
+```
+
+When you look at all the masks, with and without the clip, males are statistically different from females. However, when you look at clip as a treatment as opposed to an independent variable, sex is no longer significant. We can see that males and females show a difference in the performance with the clip, but the difference is not statistically significant (> 2 standard deviations different). This could be due to a small sample size. 
+
+
+## Experiment 2 Contrasts
+
+```{r contrasts 2}
+FFE_clip_subset$Sex<-as.factor(FFE_clip_subset$Sex)
+FFE_clip_subset$Clip<-as.factor(FFE_clip_subset$Clip)
+
+model5<-lme(Overall_FFE~Condition+Clip*Sex, random = ~1|Subject, data = FFE_clip_subset,
+            contrasts = list(Condition = contr.sum(3), Sex = contr.sum(2), Clip = contr.sum(2)))
+summary(model5)
+intervals(model5)
+
+dummy.coef(lm(Overall_FFE~Condition+Clip*Sex, data = FFE_clip_subset,
+            contrasts = list(Condition = contr.sum(3), Sex = contr.sum(2), Clip = contr.sum(2))))
+
+clip_sex<-emmeans(model5,~ Clip*Sex)
+pairs(clip_sex)
+confint(pairs(clip_sex))
+cld(clip_sex)
+
+# mask_sex<-emmeans(model5,~Sex*Clip | Condition)
+# pairs(mask_sex)
+
+### Sensitivity Analysis
+model6<-lme(Overall_FFE~Condition+Clip*Sex+Race_Ethnicity+BMI+Age, random = ~1|Subject, data = FFE_clip_subset,
+            contrasts = list(Condition = contr.sum(3), Sex = contr.sum(2), Clip = contr.sum(2)))
+summary(model6)
+
+
+## add t-tests for each mask to test the difference between the clip for male and female (difference as the response)
+##check that methods and results match with the tables and figures for the new models. 
+
+model7<-lme(Overall_FFE~Condition+Clip*Sex*Condition, random = ~1|Subject, data = FFE_clip_subset,
+            contrasts = list(Condition = contr.sum(3), Sex = contr.sum(2), Clip = contr.sum(2)))
+summary(model7)
+clip_sex<-emmeans(model7,~ Clip*Sex*Condition)
+pairs(clip_sex)
+```
+
+## T-tests on Difference between sex by mask
+
+```{r t.tests}
+FFE_diff<-subset(FFE_diff, Condition != "MKF94")
+
+## Check normal distribution
+hist(FFE_diff$Difference)
+
+
+result<-by(FFE_diff, FFE_diff$Condition, function(x) 
+  t.test(x$Difference[which(x$Sex=="F")], x$Difference[which(x$Sex=="M")], mu=0, alt="two.sided", paired = TRUE, var.equal == TRUE))
+
+output<-type.convert(as.data.frame(do.call(rbind,result), as.is=TRUE))
+print(output) 
+
+FFE_diff_avg<-FFE_diff %>% 
+  group_by(Condition, Sex) %>%
+  summarise(mean_dif = mean(Difference))
+
+FFE_diff_avg<-pivot_wider(FFE_diff_avg, names_from = Sex, values_from=mean_dif)
+FFE_diff_avg$estimate<-unlist(output$estimate)
+FFE_diff_avg$CI_lower<-unlist(output$conf.int)[c(1,3,5)]
+FFE_diff_avg$CI_upper<-unlist(output$conf.int)[c(2,4,6)]
+FFE_diff_avg$t_statistic<-unlist(output$statistic)
+FFE_diff_avg$p.value<-unlist(output$p.value)
+FFE_diff_avg
+
+
+t.test(FFE_diff$Difference[which(FFE_diff$Sex=="M" & FFE_diff$Condition=="KN95")], FFE_diff$Difference[which(FFE_diff$Sex=="F" & FFE_diff$Condition=="KN95")], paired = FALSE, mu=0, alt = "two.sided")
+```
+
+
+
+## Improvement Analysis
+
+```{r improvement}
+# FFE_diff<-subset(FFE_diff, Condition !="MKF94")
+# ## add binary variable for improvement
+# FFE_diff$Improve<-ifelse(FFE_diff$Difference>0, 1, 0)
+# length(which(FFE_diff$Improve ==1))              #259
+# 259/300*100                             # 86.3% improve with clip
+# 
+# model_bi<-glm(Improve~Condition*Sex, family = "binomial", data = FFE_diff)
+# summary(model_bi)
+
+
+quantile(FFE$N95)
+quantile(FFE$KN95)
+quantile(FFE$Surgical)
+quantile(FFE$KF94)
+FFE_quant<-as.data.frame(FFE[,c(1,3,7,9,11,15:17)])
+
+mask<-c("KN95","Surgical", "KF94")
+
+for(i in 1:3) {
+  Mask<-mask[[i]]
+  FFE_mask<-FFE_quant[,Mask]
+  quant<-ifelse(FFE_mask<quantile(FFE_mask,0.25),"1",
+                             ifelse(FFE_mask<quantile(FFE_mask,0.50) & FFE_mask>=quantile(FFE_mask,0.25),"2",
+                              ifelse(FFE_mask<quantile(FFE_mask,0.75) & FFE_mask>=quantile(FFE_mask,0.50),"3",
+                                     ifelse(FFE_mask>=quantile(FFE_mask,0.75),"4", 0))))
+  FFE_quant<-cbind(FFE_quant,quant)
+}
+
+colnames(FFE_quant)[c(3:5,9:11)]<-c("KN95_FFE","Surgical_FFE","KF94_FFE","KN95_quantile","Surgical_quantile","KF94_quantile")
+
+
+
+FFE_quant_long<-pivot_longer(FFE_quant, col = 3:11,
+               names_to = c("Condition", ".value"), 
+               names_sep = "_")
+
+model_quant<-lm(diff~FFE*Sex+quantile, data = FFE_quant_long)
+summary(model_quant)
+
+model_quant2<-lme(diff~FFE + quantile, random = ~1|Subject, data = FFE_quant_long)
+summary(model_quant2)
+anova(model_quant2)
+intervals(model_quant2)
+## analyze with difference as response and quantile as predictor
+## also try model with condition and sex as predictors
+
+ggplot(FFE_quant_long, aes(x = quantile, y = diff)) +
+  geom_boxplot() +
+  labs(x = "Baseline FFE Quartile", y = "\u0394 (With Clip - Baseline No Clip)") +
+  theme(axis.title = element_text(face = "bold", size = 18),
+        axis.text = element_text(face = "bold", size = 18)) +
+  scale_y_continuous(breaks = function(z) seq(-20, range(z)[2], by = 10)) +
+  geom_hline(yintercept = 0, linetype = "dashed")
+
+summary(FFE_quant_long$diff[which(FFE_quant_long$quantile=="1")])
+summary(FFE_quant_long$diff[which(FFE_quant_long$quantile=="2")])
+summary(FFE_quant_long$diff[which(FFE_quant_long$quantile=="3")])
+summary(FFE_quant_long$diff[which(FFE_quant_long$quantile=="4")])
+
+quant_sum<-FFE_quant_long %>%
+  group_by(Condition,quantile) %>%
+  summarise(mean_diff = mean(diff),
+            sd_diff = sd(diff),
+            median_diff = median(diff),
+            min_diff = min(diff),
+            max_diff = max(diff))
+
+quant_sum$SE<-quant_sum$sd_diff/sqrt(100)
+
+
+# model_ord<-polr(as.factor(quantile)~FFE+diff, Hess = TRUE, data = FFE_quant_long)
+# summary(model_ord)
+# 
+# ctable <- coef(summary(model_ord))
+# 
+# p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+# 
+# ctable <- cbind(ctable, "p value" = p)
+# ctable
+
+
+```
+
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+
